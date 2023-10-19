@@ -26,6 +26,8 @@ from sensor_msgs.msg import PointCloud2
 from sensor_msgs import point_cloud2
 from visualization_msgs.msg import Marker, MarkerArray
 
+from pyquaternion import Quaternion
+
 from demo import DemoDataset
 
 from queue import Queue
@@ -60,6 +62,8 @@ def point_cloud_callback(msg):
 
     pc_msg_queue.put(msg)
 
+
+
 def main():
     args, cfg = parse_config()
     logger = common_utils.create_logger()
@@ -78,11 +82,33 @@ def main():
     model.cuda()
     model.eval()
 
+    def point_cloud_callback_new(msg):
+        pc_data = point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
+        pc_list = list(pc_data)
+        pc_np = np.array(pc_list, dtype=np.float32)
+
+        # Rotate point cloud to match camera frame
+        quaternion = Quaternion(x=-0.015, y=0.197, z=0.003, w=0.980)
+        pc_np = np.dot(pc_np, quaternion.rotation_matrix.T)
+
+        
+        msg = point_cloud2.create_cloud_xyz32(msg.header, pc_np)
+
+
+
+        print("Received point cloud with shape ", pc_np.shape)
+        pointcloud_pub.publish(msg)
+        V.visualize_3d(model, dummy_dataset, msg, bbox_3d_pub, color_map, logger)
+
+
+
     #3 Initialize ROS
     pc_topic = args.pc
     rospy.init_node('CODaROSDetector', anonymous=True)
-    rospy.Subscriber(pc_topic, PointCloud2, point_cloud_callback)
+    rospy.Subscriber(pc_topic, PointCloud2, point_cloud_callback_new, queue_size=1)
+    
     bbox_3d_pub = rospy.Publisher('/coda/bbox_3d', MarkerArray, queue_size=10)
+    pointcloud_pub = rospy.Publisher('/coda/points', PointCloud2, queue_size=10)
 
     #4 Load dummy data to speed up first pass
     dummy_pc = np.random.rand(1000, 3).astype(np.float32)
@@ -91,10 +117,12 @@ def main():
     
     logger.info("Model initalized...")
     while not rospy.is_shutdown():
-        if not pc_msg_queue.empty():
-            pc_msg = pc_msg_queue.get()
+        rospy.spin()
+    
+    #     if not pc_msg_queue.empty():
+    #         pc_msg = pc_msg_queue.get()
             
-            V.visualize_3d(model, dummy_dataset, pc_msg, bbox_3d_pub, color_map, logger)
+    #         V.visualize_3d(model, dummy_dataset, pc_msg, bbox_3d_pub, color_map, logger)
     logger.info("Demo complete, cleaning up...")
 
 if __name__ == '__main__':
